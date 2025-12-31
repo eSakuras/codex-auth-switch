@@ -17,6 +17,7 @@ import (
 )
 
 const (
+	Version    = "1.0.0"
 	AppDirName = ".acodex"
 	BinDirName = "bin"
 	ExeName    = "acodex.exe"
@@ -358,6 +359,8 @@ func main() {
 		fmt.Println(tr("deleted:", "已删除:"), os.Args[2])
 	case "open":
 		_ = exec.Command("explorer", appHome()).Start()
+	case "v", "version":
+		fmt.Println(Version)
 	default:
 		fmt.Println(tr("unknown command", "未知命令"))
 		printUsage()
@@ -379,6 +382,7 @@ func printUsage() {
 		{"current", "Show current profile name", "显示当前配置文件名称"},
 		{"delete <alias>", "Delete a profile", "删除指定配置文件"},
 		{"open", "Open application directory", "打开应用程序目录"},
+		{"v", "Show version", "显示版本号"},
 	}
 
 	for _, cmd := range cmds {
