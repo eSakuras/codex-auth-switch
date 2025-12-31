@@ -1,0 +1,22 @@
+# Binaries
+/acodex.exe
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Build output
+/dist/
+
+# Go
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
