@@ -122,27 +122,45 @@ func addToUserPath(dir string) error {
 	key, _, err := registry.CreateKey(
 		registry.CURRENT_USER,
 		"Environment",
-		registry.SET_VALUE|registry.QUERY_VALUE,
+		registry.QUERY_VALUE|registry.SET_VALUE,
 	)
 	if err != nil {
 		return err
 	}
 	defer key.Close()
 
-	path, _, _ := key.GetStringValue("Path")
-	parts := strings.Split(path, ";")
-	for _, p := range parts {
-		if strings.EqualFold(p, dir) {
+	// 读取现有 Path
+	current, _, _ := key.GetStringValue("Path")
+
+	// 去重
+	for _, p := range strings.Split(current, ";") {
+		if strings.EqualFold(strings.TrimSpace(p), dir) {
+			broadcastEnvChange()
 			return nil
 		}
 	}
 
-	if path == "" {
-		path = dir
+	if current == "" {
+		current = dir
 	} else {
-		path = path + ";" + dir
+		current = current + ";" + dir
 	}
-	return key.SetStringValue("Path", path)
+
+	if err := key.SetStringValue("Path", current); err != nil {
+		return err
+	}
+
+	broadcastEnvChange()
+	return nil
+}
+
+func broadcastEnvChange() {
+	_ = exec.Command(
+		"powershell",
+		"-NoProfile",
+		"-Command",
+		`[Environment]::SetEnvironmentVariable("ACODEX_REFRESH","1","User")`,
+	).Run()
 }
 
 // Utility functions
