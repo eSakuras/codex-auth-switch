@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	Version    = "1.0.0"
+	Version    = "1.1.0"
 	AppDirName = ".acodex"
 	BinDirName = "bin"
 	ExeName    = "acodex.exe"
@@ -51,7 +51,6 @@ func tr(en, zh string) string {
 }
 
 // Path helpers
-
 func homeDir() string {
 	h, _ := os.UserHomeDir()
 	return h
@@ -89,7 +88,6 @@ func currentFile() string {
 }
 
 // Auto-installation logic
-
 func isInstalled() bool {
 	self, err := os.Executable()
 	if err != nil {
@@ -165,7 +163,6 @@ func broadcastEnvChange() {
 }
 
 // Utility functions
-
 func ensureDirs() error {
 	return os.MkdirAll(profilesDir(), 0755)
 }
@@ -233,6 +230,22 @@ func confirm(msg string) bool {
 	return s == "y" || s == "yes"
 }
 
+// 循环检测输入
+func confirmYesNoStrict(msg string) bool {
+	in := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Print(msg, " (yes/no): ")
+		s, _ := in.ReadString('\n')
+		s = strings.TrimSpace(s)
+		if s == "yes" {
+			return true
+		}
+		if s == "no" {
+			return false
+		}
+	}
+}
+
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -258,8 +271,42 @@ func backupIfExists(p string) {
 	}
 }
 
-// Command implementations
+// 从用户 Path 中移除目录
+func removeFromUserPath(dir string) error {
+	key, _, err := registry.CreateKey(
+		registry.CURRENT_USER,
+		"Environment",
+		registry.QUERY_VALUE|registry.SET_VALUE,
+	)
+	if err != nil {
+		return err
+	}
+	defer key.Close()
 
+	current, _, _ := key.GetStringValue("Path")
+	if current == "" {
+		return nil
+	}
+	parts := strings.Split(current, ";")
+	var out []string
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(p), dir) {
+			continue
+		}
+		out = append(out, p)
+	}
+	newPath := strings.Join(out, ";")
+	if err := key.SetStringValue("Path", newPath); err != nil {
+		return err
+	}
+	broadcastEnvChange()
+	return nil
+}
+
+// 命令实现
 func cmdSave(alias string) error {
 	if alias == "" {
 		return errors.New(tr("alias required", "需要指定别名"))
@@ -290,12 +337,14 @@ func cmdUse(alias string) error {
 		return errors.New(tr("profile not found", "未找到配置文件"))
 	}
 	dst := authPath()
-	if _, err := os.Stat(dst); err == nil {
-		if findMatchAuth(dst) == "" && !confirm(tr("current auth.json will be overwritten", "当前 auth.json 将被覆盖")) {
-			return errors.New(tr("aborted", "已取消"))
-		}
-		backupIfExists(dst)
+	if _, err := os.Stat(dst); err != nil {
+		return errors.New(tr("auth.json not found", "未找到 auth.json"))
 	}
+
+	if findMatchAuth(dst) == "" && !confirm(tr("current auth.json will be overwritten", "当前 auth.json 将被覆盖")) {
+		return errors.New(tr("aborted", "已取消"))
+	}
+	backupIfExists(dst)
 	if err := copyFile(src, dst); err != nil {
 		return err
 	}
@@ -304,8 +353,58 @@ func cmdUse(alias string) error {
 	return nil
 }
 
-// Main entry point
+// 卸载命令
+func cmdUninstall() error {
+	if !confirm(tr("This will uninstall acodex and remove related files. Continue?", "这将卸载 acodex 并删除相关文件，是否继续？")) {
+		fmt.Println(tr("aborted", "已取消"))
+		return nil
+	}
 
+	// 从 PATH 中移除 bin 目录
+	if err := removeFromUserPath(binDir()); err != nil {
+		// non-fatal, but report
+		fmt.Println(tr("warning: failed to remove from PATH:", "警告: 无法从 PATH 中移除:"), err)
+	}
+
+	// 删除 profiles 与当前记录
+	_ = os.RemoveAll(profilesDir())
+	_ = os.Remove(currentFile())
+
+	// 询问是否删除用户数据（CODEX_HOME）
+	if confirmYesNoStrict(tr("Delete user data under CODEX_HOME? Only full 'yes' will delete, 'no' will keep it.", "是否删除 CODEX_HOME 下的用户数据？仅输入完整 'yes' 会删除，输入 'no' 则保留。")) {
+		if err := os.RemoveAll(codexHome()); err != nil {
+			fmt.Println(tr("warning: failed to remove user data:", "警告: 无法删除用户数据:"), err)
+		} else {
+			fmt.Println(tr("user data removed.", "用户数据已删除。"))
+		}
+	} else {
+		fmt.Println(tr("user data preserved.", "用户数据已保留。"))
+	}
+
+	installed := installedExePath()
+
+	// 如果当前运行在安装位置，则通过临时 PowerShell 脚本在本进程退出后删除文件
+	if isInstalled() {
+		script := fmt.Sprintf(`while (Test-Path "%s") { Start-Sleep -Seconds 1; Remove-Item -Force "%s" -ErrorAction SilentlyContinue }; Remove-Item -Recurse -Force "%s" -ErrorAction SilentlyContinue`, installed, installed, appHome())
+		// 启动后台 PowerShell
+		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
+		if err := cmd.Start(); err != nil {
+			// 启动失败，尝试立即删除
+			fmt.Println(tr("warning: failed to spawn cleanup process:", "警告: 无法启动清理进程:"), err)
+		} else {
+			fmt.Println(tr("acodex will be removed after this process exits.", "acodex 将在本进程退出后被移除。"))
+		}
+		return nil
+	}
+
+	// 如果不是从安装位置运行，尝试直接删除安装路径和 app 目录
+	_ = os.Remove(installed)
+	_ = os.RemoveAll(appHome())
+	fmt.Println(tr("acodex uninstalled.", "acodex 已卸载。"))
+	return nil
+}
+
+// Main entry point
 func main() {
 	if !isInstalled() {
 		if err := autoInstall(); err != nil {
@@ -361,6 +460,10 @@ func main() {
 		_ = exec.Command("explorer", appHome()).Start()
 	case "v", "version":
 		fmt.Println(Version)
+	case "uninstall":
+		if err := cmdUninstall(); err != nil {
+			fmt.Println(tr("error:", "错误:"), err)
+		}
 	default:
 		fmt.Println(tr("unknown command", "未知命令"))
 		printUsage()
@@ -382,7 +485,8 @@ func printUsage() {
 		{"current", "Show current profile name", "显示当前配置文件名称"},
 		{"delete <alias>", "Delete a profile", "删除指定配置文件"},
 		{"open", "Open application directory", "打开应用程序目录"},
-		{"v", "Show version", "显示版本号"},
+		{"uninstall", "Uninstall acodex (remove files and PATH entry)", "卸载程序"},
+		{"v", "Show version", "当前版本号"},
 	}
 
 	for _, cmd := range cmds {
