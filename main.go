@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	Version    = "1.1.0"
+	Version    = "1.1.1"
 	AppDirName = ".acodex"
 	BinDirName = "bin"
 	ExeName    = "acodex.exe"
