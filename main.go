@@ -337,14 +337,14 @@ func cmdUse(alias string) error {
 		return errors.New(tr("profile not found", "未找到配置文件"))
 	}
 	dst := authPath()
-	if _, err := os.Stat(dst); err != nil {
-		return errors.New(tr("auth.json not found", "未找到 auth.json"))
+
+	if _, err := os.Stat(dst); err == nil {
+		if findMatchAuth(dst) == "" && !confirm(tr("current auth.json will be overwritten", "当前 auth.json 将被覆盖")) {
+			return errors.New(tr("aborted", "已取消"))
+		}
+		backupIfExists(dst)
 	}
 
-	if findMatchAuth(dst) == "" && !confirm(tr("current auth.json will be overwritten", "当前 auth.json 将被覆盖")) {
-		return errors.New(tr("aborted", "已取消"))
-	}
-	backupIfExists(dst)
 	if err := copyFile(src, dst); err != nil {
 		return err
 	}
